@@ -81,6 +81,7 @@ class BiblIndexClient:
         max_retries: int = 5,
         max_consecutive_throttles: int = 5,
         timeout: float = 60.0,
+        on_response: Callable[[requests.Response], None] | None = None,
     ) -> None:
         self.settings = settings
         self.session = session or requests.Session()
@@ -98,6 +99,9 @@ class BiblIndexClient:
         self.max_retries = max_retries
         self.max_consecutive_throttles = max_consecutive_throttles
         self.timeout = timeout
+        # Called after every response received over the network (not cache hits),
+        # e.g. to show progress.
+        self.on_response = on_response
         self._token: str | None = None
         self._token_expires_at = 0.0
         self.cache_hits = 0
@@ -210,6 +214,7 @@ class BiblIndexClient:
                 self._backoff(attempt, f"network error ({exc.__class__.__name__})")
                 continue
 
+            self._notify(response)
             limiter.update_from_headers(response.headers)
             status = response.status_code
 
@@ -275,6 +280,10 @@ class BiblIndexClient:
             except ValueError as exc:
                 raise ApiError(f"Invalid JSON from {url}", status) from exc
 
+    def _notify(self, response: requests.Response) -> None:
+        if self.on_response is not None:
+            self.on_response(response)
+
     def _backoff(self, attempt: int, reason: str) -> None:
         wait = min(2.0**attempt, 60.0)
         log.warning("%s; retry %d/%d in %.0fs.", reason, attempt, self.max_retries, wait)
@@ -305,6 +314,7 @@ class BiblIndexClient:
             headers={"Accept": "application/json"},
             timeout=self.timeout,
         )
+        self._notify(response)
         self.auth_limiter.update_from_headers(response.headers)
         if not response.ok:
             hint = ""

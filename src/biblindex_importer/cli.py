@@ -12,6 +12,7 @@ import logging
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import TextIO
 
 from .books import BookNotFoundError, fetch_books, find_book
 from .cache import ResponseCache
@@ -22,6 +23,41 @@ from .exporter import BookExporter, write_csv
 log = logging.getLogger("biblindex_importer")
 
 
+class RequestDots:
+    """Print one dot per HTTP response, so a long run visibly makes progress."""
+
+    def __init__(self, stream: TextIO, width: int = 100) -> None:
+        self.stream = stream
+        self.width = width
+        self.column = 0
+
+    def __call__(self, response: object = None) -> None:
+        self.stream.write(".")
+        self.column += 1
+        if self.column >= self.width:
+            self.end_line()
+        self.stream.flush()
+
+    def end_line(self) -> None:
+        """Finish a started row of dots so the next log line starts cleanly."""
+        if self.column:
+            self.stream.write("\n")
+            self.stream.flush()
+            self.column = 0
+
+
+class DotAwareHandler(logging.StreamHandler):
+    """Log handler that ends the current row of dots before each record."""
+
+    def __init__(self, dots: RequestDots) -> None:
+        super().__init__(dots.stream)
+        self.dots = dots
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.dots.end_line()
+        super().emit(record)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="biblindex-import",
@@ -29,6 +65,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--env-file", default=".env", help="Credentials file (default: .env).")
     parser.add_argument("-v", "--verbose", action="store_true", help="Debug logging.")
+    parser.add_argument(
+        "--no-dots", action="store_true", help="Don't print a dot for every API response."
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     export = sub.add_parser("export", help="Export all quotations of one Bible book.")
@@ -61,11 +100,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)-7s %(message)s",
-        datefmt="%H:%M:%S",
+    dots = None if args.no_dots else RequestDots(sys.stderr)
+    handler = DotAwareHandler(dots) if dots else logging.StreamHandler()
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)-7s %(message)s", datefmt="%H:%M:%S")
     )
+    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, handlers=[handler])
     try:
         settings = Settings.from_env(args.env_file)
     except ConfigError as exc:
@@ -75,7 +115,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     cache = ResponseCache(settings.cache_path, ttl_seconds=settings.cache_ttl_days * 86400)
     if getattr(args, "refresh", False):
         cache.clear()
-    client = BiblIndexClient(settings, cache=cache)
+    client = BiblIndexClient(settings, cache=cache, on_response=dots)
     try:
         if args.command == "books":
             return _list_books(client)

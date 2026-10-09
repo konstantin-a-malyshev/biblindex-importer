@@ -253,3 +253,13 @@ def test_hydra_prefixed_keys():
     assert hydra({"hydra:member": [1]}, "member") == [1]
     assert hydra({"member": [2]}, "member") == [2]
     assert hydra({}, "member", []) == []
+
+
+def test_on_response_fires_for_every_network_response(api, make_client):
+    api.add(quotation(1))
+    api.queue("/api/quotations/1", 429, **{"Retry-After": "1"})
+    seen = []
+    client = make_client(cache=ResponseCache(":memory:"), on_response=seen.append)
+    client.get("/api/quotations/1")  # token + 429 + 200
+    client.get("/api/quotations/1")  # cache hit: nothing sent
+    assert [r.status_code for r in seen] == [200, 429, 200]

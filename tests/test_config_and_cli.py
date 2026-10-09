@@ -125,3 +125,35 @@ def test_cli_export_requires_credentials(tmp_path):
 def test_cli_lists_books(cli_env, biblindex_cli_api, capsys):
     assert cli.main(["--env-file", str(cli_env), "books"]) == 0
     assert "John" in capsys.readouterr().out
+
+
+def test_request_dots_wrap_and_end_lines():
+    import io
+    import logging
+
+    stream = io.StringIO()
+    dots = cli.RequestDots(stream, width=3)
+    for _ in range(5):
+        dots()
+    assert stream.getvalue() == "...\n.."
+    handler = cli.DotAwareHandler(dots)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    handler.emit(logging.LogRecord("x", logging.INFO, "", 0, "hello", None, None))
+    assert stream.getvalue() == "...\n..\nhello\n"
+    dots.end_line()  # nothing pending: no blank line
+    assert stream.getvalue().endswith("hello\n")
+
+
+def _dot_lines(err: str) -> list[str]:
+    return [line for line in err.splitlines() if line and set(line) == {"."}]
+
+
+def test_cli_prints_a_dot_per_response(cli_env, biblindex_cli_api, capsys):
+    cli.main(["--env-file", str(cli_env), "books"])
+    assert _dot_lines(capsys.readouterr().err) == ["."]  # one page of books
+
+
+def test_cli_no_dots(cli_env, biblindex_cli_api, capsys):
+    cli.main(["--env-file", str(cli_env), "--no-dots", "books"])
+    assert len(biblindex_cli_api.calls) == 1  # a real request was made...
+    assert _dot_lines(capsys.readouterr().err) == []  # ...but no dot printed

@@ -36,7 +36,9 @@ Setup: `python -m venv .venv && .venv/Scripts/python -m pip install -e ".[dev]" 
   `COORDINATE_COLUMNS` keys (empty when unknown).
 - `references.py`: pure parser for reference strings such as `[JB] Jn 1:1 w1-16`.
   It is the fallback when sequences are not readable.
-- `cli.py`: argparse subcommands `export` and `books`.
+- `cli.py`: argparse subcommands `export` and `books`. `RequestDots` prints a dot per
+  network response via the client's `on_response` hook (no dot for cache hits).
+  `DotAwareHandler` ends a row of dots before each log line. `--no-dots` disables it.
 
 Tests use `tests/conftest.py::FakeApi`, an in-memory fake server on `responses`
 that paginates and filters through a private `_f` dict per item, with

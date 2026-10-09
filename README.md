@@ -53,6 +53,10 @@ After `pip install -e .`, `biblindex-import` is the same as `python -m biblindex
 Options: `--bible <id>` overrides `BIBLINDEX_BIBLE_ID`. `--refresh` ignores the cache.
 `-v` turns on debug logging.
 
+While it runs, the tool prints one dot per API response, 100 per row. Dots stop
+only while it waits (rate limit, retries) or reads from the cache. `--no-dots`
+turns them off, e.g. when output goes to a log file.
+
 ## Output
 
 One row per quotation and per passage (sequence) of the book that it quotes. An
