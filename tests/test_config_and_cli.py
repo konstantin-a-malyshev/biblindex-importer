@@ -22,9 +22,12 @@ ENV_VARS = [
 
 
 @pytest.fixture(autouse=True)
-def clean_env(monkeypatch):
+def clean_env(monkeypatch, tmp_path):
     for name in ENV_VARS:
         monkeypatch.delenv(name, raising=False)
+    # Run in a scratch folder: an export without --output writes to
+    # output/<book>_quotations.csv, which must never be the user's real folder.
+    monkeypatch.chdir(tmp_path)
 
 
 def test_defaults_without_env_file(tmp_path):

@@ -24,7 +24,8 @@ _BIBLE_PREFIX = re.compile(r"^\s*\[(?P<bible>[^\]]*)\]\s*")
 _BOOK = r"(?:[1-4]\s?)?[A-Za-z][A-Za-z.]*(?:\s\([^)]*\))?"
 # A reference to a whole book, e.g. "[JB] Jn" (150 of John's JB quotations).
 _BOOK_ONLY = re.compile(rf"^(?P<book>{_BOOK})\s*$")
-_POINT = r"\d+[A-Za-z]?(?::\d+[a-z]?)?"
+# "\s*" after the colon: 127 Vulgate references read "[Vg] Jn 14: 23".
+_POINT = r"\d+[A-Za-z]?(?::\s*\d+[a-z]?)?"
 _SPAN = re.compile(
     rf"^(?:(?P<book>{_BOOK})\s+)?"
     rf"(?P<start>{_POINT})"
@@ -114,7 +115,7 @@ def same_book(a: str, b: str) -> bool:
 
 def _split_point(point: str) -> tuple[str, str]:
     chapter, _, verse = point.partition(":")
-    return chapter, verse
+    return chapter, verse.strip()
 
 
 def _words(match: re.Match[str]) -> str:

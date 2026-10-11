@@ -114,6 +114,17 @@ API behaviour to FakeApi rather than mocking individual URLs.
   collection, whichever takes fewer requests.
   The user said author, work and position are the most important data. A
   "by-work" strategy existed once and was removed because it gives no position.
+- **Data quality of the full John export (2026-10-11, all Bibles, 72,466 rows):**
+  - Whole-book references (`[JB] Jn`): 149. Whole-chapter references: 63.
+  - Verses past the end of their chapter (e.g. `[Vg] Jn 15:33`): 65.
+  - Chapters above 21 (e.g. `[NTG] Jn 74:12`): 25. These are BiblIndex data errors.
+  - Unparseable references: 6 (`[JB] Jn:33`, `[JB] Jn 20:17-?`, `[NTG] Jn 4:35-C`, …).
+  - Patristic mentions with no position fields: 2.
+  - Works without an abbreviation (position has no `[ABBR]` prefix): 1,033 works,
+    25,812 rows.
+  - The website's verse-range search (JB 54,338; NRSV pivot 72,268) seems to skip
+    whole-book and out-of-range references. That rule reproduces the JB gap of 169
+    exactly, but is 16 off for all Bibles.
 - **IDs:** John = book 50, Matthew 47, Mark 48, Luke 49.
 - **Bibles matter for completeness:** every quotation is indexed in the Bible its
   author quoted. For John (2026-10-11): 8 JB (French) 54,507, 4 NTG (Greek NT) 11,892,
@@ -151,3 +162,6 @@ update this section.
   Never run a full export just to test something.
 - The design should stay book-agnostic: nothing John-specific outside tests and
   docs.
+- Tests must never write to the real `output/` or `.cache/`. CLI tests run in
+  `tmp_path` (autouse `monkeypatch.chdir`). This was learned when a test overwrote
+  `output/jn_quotations.csv`.

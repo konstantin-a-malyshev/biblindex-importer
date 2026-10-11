@@ -16,6 +16,8 @@ def coords(span: Span):
         ("[JB] Jn 1:1 w1-16", ("1", "1", "1", "1", "1-16"), "verse"),
         ("[JB] Jn 4", ("4", "", "4", "", ""), "chapter"),
         ("[JB] Jn", ("", "", "", "", ""), "book"),
+        ("[Vg] Jn 14: 23", ("14", "23", "14", "23", ""), "verse"),
+        ("[Vg] Jn 17: 22-23", ("17", "22", "17", "23", ""), "consecutive_verses"),
         # Plausible shapes not yet seen live.
         ("Jn 1:1-2:3", ("1", "1", "2", "3", ""), "consecutive_verses"),
         ("Jn 3:16a", ("3", "16a", "3", "16a", ""), "verse"),
@@ -59,7 +61,7 @@ def test_numbered_and_qualified_books():
     assert parse_reference("Sus (Th) 1:5")[0].book == "Sus (Th)"
 
 
-@pytest.mark.parametrize("text", ["Jn ???", "Jn 3:16 see note"])
+@pytest.mark.parametrize("text", ["Jn ???", "Jn 3:16 see note", "[JB] Jn:33"])
 def test_unparseable_span_is_flagged_not_dropped(text):
     (span,) = parse_reference(text)
     assert not span.parsed
