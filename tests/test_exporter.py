@@ -2,7 +2,7 @@ import csv
 
 import pytest
 
-from biblindex_importer.books import Book
+from biblindex_importer.books import Bible, Book
 from biblindex_importer.cache import ResponseCache
 from biblindex_importer.exporter import (
     BASE_COLUMNS,
@@ -141,7 +141,7 @@ def biblindex(api):
 
 
 def test_export_joins_quotations_with_verse_coordinates(biblindex, make_client):
-    result = BookExporter(make_client(), bible_id=8).export(JOHN)
+    result = BookExporter(make_client(), bibles=[8]).export(JOHN)
 
     assert result.quotations == 2  # the Matthew-only quotation is filtered out
     assert [r["quotation_id"] for r in result.rows] == [100, 101]
@@ -160,7 +160,7 @@ def test_export_joins_quotations_with_verse_coordinates(biblindex, make_client):
 
 
 def test_export_uses_book_filters_on_every_listing(biblindex, make_client):
-    BookExporter(make_client(), bible_id=8).export(JOHN)
+    BookExporter(make_client(), bibles=[8]).export(JOHN)
     for path in ("/api/quotations", "/api/extracts", "/api/sequences"):
         params = biblindex.calls_to(path)[0][1]
         assert (params["bible"], params["startBook"]) == ("8", "50")
@@ -171,12 +171,12 @@ def test_export_one_row_per_john_sequence(biblindex, make_client):
         "/api/sequences/1",
         "/api/sequences/2",
     ]
-    result = BookExporter(make_client(), bible_id=8).export(JOHN)
+    result = BookExporter(make_client(), bibles=[8]).export(JOHN)
     assert [r["reference"] for r in result.rows] == ["Jn 1:1", "Jn 3:16-18", "Jn 3:16-18"]
 
 
 def test_export_with_limit_fetches_only_what_it_needs(biblindex, make_client):
-    result = BookExporter(make_client(), bible_id=8).export(JOHN, limit=1)
+    result = BookExporter(make_client(), bibles=[8]).export(JOHN, limit=1)
     assert [r["reference"] for r in result.rows] == ["Jn 1:1"]
     assert biblindex.calls_to("/api/extracts") == []
     assert biblindex.calls_to("/api/sequences") == []
@@ -184,7 +184,7 @@ def test_export_with_limit_fetches_only_what_it_needs(biblindex, make_client):
 
 
 def test_rows_record_sequence_as_coordinate_source(biblindex, make_client):
-    result = BookExporter(make_client(), bible_id=8).export(JOHN)
+    result = BookExporter(make_client(), bibles=[8]).export(JOHN)
     assert {r["coordinates_from"] for r in result.rows} == {"sequence"}
     assert result.rows[0]["sequence_id"] == 1
 
@@ -198,7 +198,7 @@ def deny_sequences(api):
 @pytest.mark.parametrize("limit", [None, 2])
 def test_denied_sequences_fall_back_to_reference_text(biblindex, make_client, limit, caplog):
     deny_sequences(biblindex)
-    exporter = BookExporter(make_client(), bible_id=8)
+    exporter = BookExporter(make_client(), bibles=[8])
     result = exporter.export(JOHN, limit=limit)
 
     assert not exporter.sequences_readable
@@ -215,7 +215,7 @@ def test_denied_sequences_fall_back_to_reference_text(biblindex, make_client, li
 
 def test_denied_sequences_are_not_retried_per_quotation(biblindex, make_client):
     deny_sequences(biblindex)
-    BookExporter(make_client(), bible_id=8).export(JOHN, limit=2)
+    BookExporter(make_client(), bibles=[8]).export(JOHN, limit=2)
     sequence_calls = [c for c in biblindex.calls if c[0].startswith("/api/sequences")]
     assert len(sequence_calls) == 1
 
@@ -223,7 +223,7 @@ def test_denied_sequences_are_not_retried_per_quotation(biblindex, make_client):
 def test_unparseable_reference_keeps_raw_text(biblindex, make_client):
     deny_sequences(biblindex)
     biblindex.resources["/api/extracts/10"]["abbreviation"] = "[JB] Jn prologue"
-    result = BookExporter(make_client(), bible_id=8).export(JOHN)
+    result = BookExporter(make_client(), bibles=[8]).export(JOHN)
     first = result.rows[0]
     assert first["reference"] == "Jn prologue"
     assert first["coordinates_from"] == ""
@@ -231,14 +231,14 @@ def test_unparseable_reference_keeps_raw_text(biblindex, make_client):
 
 
 def test_authors_are_resolved_once_and_anonymously(biblindex, make_client):
-    BookExporter(make_client(), bible_id=8).export(JOHN)
+    BookExporter(make_client(), bibles=[8]).export(JOHN)
     calls = biblindex.calls_to("/api/authors/90")
     assert len(calls) == 1
     assert "Authorization" not in calls[0][2]
 
 
 def test_with_works_adds_work_edition_and_position(biblindex, make_client):
-    result = BookExporter(make_client(), bible_id=8).export(JOHN, with_works=True)
+    result = BookExporter(make_client(), bibles=[8]).export(JOHN, with_works=True)
     first, second = result.rows
     # Matches the website: "[IVD] 1 (col.77, l.38) - 1 (col.77, l.38)" in PG48.
     assert first["work_title"] == "Contra Iudaeos, gentiles et haereticos"
@@ -258,7 +258,7 @@ def test_with_works_adds_work_edition_and_position(biblindex, make_client):
 
 def test_with_works_fetches_few_mentions_one_by_one(biblindex, make_client):
     # 1 mention needed vs a 1-page collection: a single request is not worse.
-    BookExporter(make_client(), bible_id=8).export(JOHN, with_works=True, limit=1)
+    BookExporter(make_client(), bibles=[8]).export(JOHN, with_works=True, limit=1)
     listed = [
         c for c in biblindex.calls_to("/api/patristic_mentions") if c[1]["itemsPerPage"] != "1"
     ]
@@ -268,7 +268,7 @@ def test_with_works_fetches_few_mentions_one_by_one(biblindex, make_client):
 
 def test_with_works_lists_collection_when_cheaper(biblindex, make_client):
     # 2 mentions needed, the collection fits on 1 page: listing is cheaper.
-    exporter = BookExporter(make_client(), bible_id=8)
+    exporter = BookExporter(make_client(), bibles=[8])
     quotations = [biblindex.resources[f"/api/quotations/{n}"] for n in (100, 101)]
     works = exporter.resolve_works(quotations)
     assert works["/api/quotations/100"]["work_abbreviation"] == "IVD"
@@ -280,7 +280,7 @@ def test_with_works_lists_collection_when_cheaper(biblindex, make_client):
 
 
 def test_resolve_all_fetches_what_the_listing_missed(biblindex, make_client):
-    exporter = BookExporter(make_client(), bible_id=8)
+    exporter = BookExporter(make_client(), bibles=[8])
     biblindex.add({"@id": "/api/patristic_mentions/999", "workEdition": None})  # not listed
     found = exporter.resolve_all(
         ["/api/patristic_mentions/500", "/api/patristic_mentions/501",
@@ -294,7 +294,7 @@ def test_resolve_all_fetches_what_the_listing_missed(biblindex, make_client):
 
 
 def test_resolve_all_falls_back_when_listing_fails(biblindex, make_client):
-    exporter = BookExporter(make_client(), bible_id=8)
+    exporter = BookExporter(make_client(), bibles=[8])
     found = exporter.resolve_all(
         ["/api/authors/90", "/api/authors/91"], "/api/authors", auth=False, label="Authors"
     )
@@ -304,7 +304,7 @@ def test_resolve_all_falls_back_when_listing_fails(biblindex, make_client):
 def test_missing_mention_counts_as_unresolved(biblindex, make_client):
     del biblindex.resources["/api/patristic_mentions/501"]
     biblindex.collections["/api/patristic_mentions"].pop(1)
-    result = BookExporter(make_client(), bible_id=8).export(JOHN, with_works=True)
+    result = BookExporter(make_client(), bibles=[8]).export(JOHN, with_works=True)
     assert result.unresolved_works == 1
     assert result.rows[1]["position"] == ""
 
@@ -325,10 +325,10 @@ def test_format_position(mention, abbreviation, unit, expected):
 
 def test_rerun_with_cache_makes_no_rate_limited_requests(biblindex, make_client):
     cache = ResponseCache(":memory:")
-    BookExporter(make_client(cache=cache), bible_id=8).export(JOHN, with_works=True)
+    BookExporter(make_client(cache=cache), bibles=[8]).export(JOHN, with_works=True)
     calls_before = len(biblindex.calls)
     client = make_client(cache=cache)
-    BookExporter(client, bible_id=8).export(JOHN, with_works=True)
+    BookExporter(client, bibles=[8]).export(JOHN, with_works=True)
     assert len(biblindex.calls) == calls_before
     assert client.auth_limiter.stats.requests == 0
 
@@ -353,3 +353,79 @@ def test_write_csv_without_works_has_no_work_columns(tmp_path):
     with path.open(encoding="utf-8-sig") as fh:
         header = fh.readline().strip().split(",")
     assert header == BASE_COLUMNS
+
+
+# -- Several Bibles -------------------------------------------------------------
+
+
+def add_vulgate_quotation(api, n=110, also_in_jb=None):
+    """A John quotation indexed in the Vulgate (bible 2) instead of JB (bible 8)."""
+    api.collections["/api/sequences"].append(
+        {**seq(4, 50, "3", "16", name="Jn 3:16"), "bible": "/api/bibles/2",
+         "_f": {"bible": 2, "startBook": 50}}
+    )
+    api.add({**api.collections["/api/sequences"][-1]})
+    extract = {"@id": "/api/extracts/20", "id": 20, "abbreviation": "[Vg] Jn 3:16",
+               "sequences": ["/api/sequences/4"], "_f": {"bible": 2, "startBook": 50}}
+    api.collections["/api/extracts"].append(extract)
+    api.add(extract)
+    vg = quotation(n, 20, 500, work=7)
+    vg["_f"]["bible"] = 2
+    api.collections["/api/quotations"].append(vg)
+    api.add(vg)
+
+
+def test_export_covers_several_bibles(biblindex, make_client):
+    add_vulgate_quotation(biblindex)
+    bibles = [Bible(8, "JB"), Bible(2, "Vg")]
+    result = BookExporter(make_client(), bibles).export(JOHN)
+
+    assert [(r["quotation_id"], r["bible"], r["bible_id"]) for r in result.rows] == [
+        (100, "JB", 8),
+        (101, "JB", 8),
+        (110, "Vg", 2),
+    ]
+    assert result.per_bible == {"JB": 2, "Vg": 1}
+    vg_row = result.rows[2]
+    assert (vg_row["reference"], vg_row["coordinates_from"]) == ("Jn 3:16", "sequence")
+    queried = {c[1]["bible"] for c in biblindex.calls_to("/api/quotations")}
+    assert queried == {"8", "2"}
+
+
+def test_quotation_indexed_in_two_bibles_is_exported_once(biblindex, make_client):
+    twin = {**biblindex.resources["/api/quotations/100"]}
+    twin["_f"] = {**twin["_f"], "bible": 2}
+    biblindex.collections["/api/quotations"].append(twin)
+    result = BookExporter(make_client(), [8, 2]).export(JOHN)
+    assert [r["quotation_id"] for r in result.rows] == [100, 101]
+
+
+def test_limit_spans_bibles(biblindex, make_client):
+    add_vulgate_quotation(biblindex)
+    result = BookExporter(make_client(), [8, 2]).export(JOHN, limit=3)
+    assert [r["quotation_id"] for r in result.rows] == [100, 101, 110]
+    result = BookExporter(make_client(), [8, 2]).export(JOHN, limit=2)
+    assert [r["quotation_id"] for r in result.rows] == [100, 101]
+
+
+def test_bibles_without_quotations_are_skipped_cheaply(biblindex, make_client):
+    result = BookExporter(make_client(), [8, 5]).export(JOHN)
+    assert result.per_bible == {"8": 2}
+    assert [c for c in biblindex.calls_to("/api/extracts") if c[1].get("bible") == "5"] == []
+
+
+def test_write_csv_keeps_one_record_per_line(tmp_path):
+    path = tmp_path / "john.csv"
+    rows = [
+        {"quotation_id": 1, "edition_name": "ASSEMANI J.S., Ephraem Syri opera\r\n"},
+        {"quotation_id": 2, "edition_name": "Two\nlines  and\ttabs", "position": None},
+    ]
+    write_csv(rows, path, with_works=True)
+    lines = path.read_text(encoding="utf-8-sig").splitlines()
+    assert len(lines) == 1 + len(rows)
+    with path.open(encoding="utf-8-sig", newline="") as fh:
+        parsed = list(csv.DictReader(fh))
+    assert [r["edition_name"] for r in parsed] == [
+        "ASSEMANI J.S., Ephraem Syri opera",
+        "Two lines and tabs",
+    ]

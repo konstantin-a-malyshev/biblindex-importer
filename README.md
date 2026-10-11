@@ -20,7 +20,7 @@ BIBLINDEX_CLIENT_ID=...
 BIBLINDEX_CLIENT_SECRET=...
 BIBLINDEX_USERNAME=...      # your biblindex.org login
 BIBLINDEX_PASSWORD=...
-BIBLINDEX_BIBLE_ID=8
+BIBLINDEX_BIBLE_ID=all
 ```
 
 The token is requested with the OAuth2 password grant (client ID and secret plus
@@ -40,6 +40,7 @@ python -m biblindex_importer export --book John
 # Any other book: name, abbreviation, code or id all work
 python -m biblindex_importer export --book Mt --output output/matthew.csv
 python -m biblindex_importer books            # list books and their ids
+python -m biblindex_importer bibles           # list Bible editions and their ids
 
 # Quick trial run: first 20 quotations only
 python -m biblindex_importer export --book John --limit 20
@@ -50,12 +51,40 @@ python -m biblindex_importer export --book John --with-works
 
 After `pip install -e .`, `biblindex-import` is the same as `python -m biblindex_importer`.
 
-Options: `--bible <id>` overrides `BIBLINDEX_BIBLE_ID`. `--refresh` ignores the cache.
+Options: `--bible all` or `--bible 8,4,2` overrides `BIBLINDEX_BIBLE_ID`.
+`--refresh` ignores the cache.
 `-v` turns on debug logging.
 
-While it runs, the tool prints one dot per API response, 100 per row. Dots stop
-only while it waits (rate limit, retries) or reads from the cache. `--no-dots`
-turns them off, e.g. when output goes to a log file.
+While it runs, the tool prints one mark per request, 100 per row:
+
+| Mark | Meaning |
+|---|---|
+| `.` | Response received from the API |
+| `!` | Served from the local cache, nothing sent (e.g. when resuming a run) |
+| `x` | Error: an HTTP error status, a rate-limit refusal (429), a Cloudflare check or a network failure. Retried where sensible, so `x.` means it failed and then succeeded |
+
+When the marks pause, the tool is waiting (rate limit or retry back-off), and a
+log line says why. `--no-dots` turns the marks off, e.g. when output goes to a
+log file.
+
+## Which Bibles?
+
+BiblIndex indexes each quotation against the Bible text its author used.
+Greek authors are indexed against the Greek New Testament (NTG), Latin ones
+against the Vulgate (Vg), and many against the French Bible de Jérusalem (JB).
+For John:
+
+| Bible | Quotations |
+|---|---|
+| 8 JB (French) | 54,507 |
+| 4 NTG (Greek) | 11,892 |
+| 2 Vg (Latin) | 6,053 |
+| 14 NTS (Syriac) | 14 |
+| **all** | **72,466** |
+
+So keep `BIBLINDEX_BIBLE_ID=all` (the default) to get every quotation. Each
+quotation appears once, and the `bible` column shows which edition's verse
+numbering its row uses.
 
 ## Output
 
@@ -68,7 +97,8 @@ UTF-8 with a BOM, so Excel shows Greek and Latin text correctly.
 | `quotation_id` | BiblIndex quotation id |
 | `reference` | Quoted span, e.g. `Jn 3:16-18` |
 | `extract_reference` | Full quoted passage (may span several books) |
-| `bible_id`, `start_book`, `start_chapter`, `start_verse`, `end_book`, `end_chapter`, `end_verse` | Coordinates in that Bible's numbering (verses may carry a letter: `16a`) |
+| `bible_id`, `bible` | Bible edition whose numbering the row follows, e.g. `8`, `JB` |
+| `start_book`, `start_chapter`, `start_verse`, `end_book`, `end_chapter`, `end_verse` | Coordinates in that Bible's numbering (verses may carry a letter: `16a`) |
 | `words` | Word range inside the verse, e.g. `1-16` (empty when the whole verse is meant) |
 | `sequence_type` | `verse`, `consecutive_verses`, `chapter`, … |
 | `coordinates_from` | `sequence` (exact, from `/api/sequences`), `reference` (parsed from the reference text), or empty if the reference couldn't be parsed |

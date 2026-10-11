@@ -15,6 +15,7 @@ def coords(span: Span):
         ("[JB] Jn 16:27-28", ("16", "27", "16", "28", ""), "consecutive_verses"),
         ("[JB] Jn 1:1 w1-16", ("1", "1", "1", "1", "1-16"), "verse"),
         ("[JB] Jn 4", ("4", "", "4", "", ""), "chapter"),
+        ("[JB] Jn", ("", "", "", "", ""), "book"),
         # Plausible shapes not yet seen live.
         ("Jn 1:1-2:3", ("1", "1", "2", "3", ""), "consecutive_verses"),
         ("Jn 3:16a", ("3", "16a", "3", "16a", ""), "verse"),

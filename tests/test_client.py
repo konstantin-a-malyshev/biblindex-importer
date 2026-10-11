@@ -6,6 +6,9 @@ import requests
 
 from biblindex_importer.cache import ResponseCache
 from biblindex_importer.client import (
+    EVENT_CACHE,
+    EVENT_ERROR,
+    EVENT_OK,
     ApiError,
     AuthenticationError,
     CloudflareChallengeError,
@@ -255,11 +258,27 @@ def test_hydra_prefixed_keys():
     assert hydra({}, "member", []) == []
 
 
-def test_on_response_fires_for_every_network_response(api, make_client):
+def test_on_event_reports_ok_cache_and_error(api, make_client):
     api.add(quotation(1))
     api.queue("/api/quotations/1", 429, **{"Retry-After": "1"})
-    seen = []
-    client = make_client(cache=ResponseCache(":memory:"), on_response=seen.append)
-    client.get("/api/quotations/1")  # token + 429 + 200
+    events = []
+    client = make_client(cache=ResponseCache(":memory:"), on_event=events.append)
+    client.get("/api/quotations/1")  # token ok, 429 error, retry ok
     client.get("/api/quotations/1")  # cache hit: nothing sent
-    assert [r.status_code for r in seen] == [200, 429, 200]
+    assert events == [EVENT_OK, EVENT_ERROR, EVENT_OK, EVENT_CACHE]
+
+
+def test_on_event_reports_network_errors(rsps, make_client):
+    rsps.add("GET", "https://biblindex.test/api/books/1", body=requests.ConnectionError("boom"))
+    rsps.add("GET", "https://biblindex.test/api/books/1", json={"@id": "/api/books/1"})
+    events = []
+    make_client(on_event=events.append).get("/api/books/1", auth=False)
+    assert events == [EVENT_ERROR, EVENT_OK]
+
+
+def test_on_event_reports_final_failures_too(api, make_client):
+    api.queue("/api/quotations", 403, '{"detail": "Access Denied."}')
+    events = []
+    with pytest.raises(PermissionDeniedError):
+        make_client(on_event=events.append).get("/api/quotations")
+    assert events == [EVENT_OK, EVENT_ERROR]  # token, then the refusal

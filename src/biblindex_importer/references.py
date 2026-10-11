@@ -8,6 +8,7 @@ only source of chapter/verse coordinates. Observed shapes (bible 8, John):
     [JB] Jn 16:27-28       verse range in one chapter
     [JB] Jn 1:1 w1-16      words 1-16 of one verse
     [JB] Jn 4              whole chapter
+    [JB] Jn                whole book
 
 The parser also accepts cross-chapter ranges (``Jn 1:1-2:3``), verse letters
 (``3:16a``) and several spans separated by ``;``. A span it cannot read is
@@ -20,9 +21,12 @@ import re
 from dataclasses import dataclass
 
 _BIBLE_PREFIX = re.compile(r"^\s*\[(?P<bible>[^\]]*)\]\s*")
+_BOOK = r"(?:[1-4]\s?)?[A-Za-z][A-Za-z.]*(?:\s\([^)]*\))?"
+# A reference to a whole book, e.g. "[JB] Jn" (150 of John's JB quotations).
+_BOOK_ONLY = re.compile(rf"^(?P<book>{_BOOK})\s*$")
 _POINT = r"\d+[A-Za-z]?(?::\d+[a-z]?)?"
 _SPAN = re.compile(
-    r"^(?:(?P<book>(?:[1-4]\s?)?[A-Za-z][A-Za-z.]*(?:\s\([^)]*\))?)\s+)?"
+    rf"^(?:(?P<book>{_BOOK})\s+)?"
     rf"(?P<start>{_POINT})"
     # The (?![\d:]) keeps "w3-1:2 w5" from reading "1" as the last word.
     r"(?:\s*w(?P<start_word>\d+)(?:-(?P<start_word_end>\d+)(?![\d:]))?)?"
@@ -47,6 +51,8 @@ class Span:
         """Same vocabulary as the API's sequence ``type``."""
         if not self.parsed:
             return ""
+        if not self.start_chapter:
+            return "book"
         if not self.start_verse:
             return "chapter" if self.start_chapter == self.end_chapter else "consecutive_chapters"
         if (self.start_chapter, self.start_verse) == (self.end_chapter, self.end_verse):
@@ -69,6 +75,11 @@ def parse_reference(text: str | None) -> list[Span]:
         if prefix:
             bible = prefix.group("bible").strip()
             raw = raw[prefix.end() :]
+        whole_book = _BOOK_ONLY.match(raw)
+        if whole_book:
+            book = whole_book.group("book").strip()
+            spans.append(Span(text=raw, bible=bible, book=book))
+            continue
         match = _SPAN.match(raw)
         if not match:
             spans.append(Span(text=raw, bible=bible, book=book, parsed=False))

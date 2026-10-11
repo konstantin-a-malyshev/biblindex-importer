@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,7 +21,7 @@ class Settings:
     client_secret: str = ""
     username: str = ""
     password: str = ""
-    bible_id: int = 8
+    bibles: str = "all"  # "all" or ids like "8,4,2"
     locale: str = "en"
     min_interval: float = 1.1
     public_min_interval: float = 0.5
@@ -48,7 +49,7 @@ class Settings:
                 client_secret=get("BIBLINDEX_CLIENT_SECRET", ""),
                 username=get("BIBLINDEX_USERNAME", ""),
                 password=get("BIBLINDEX_PASSWORD", ""),
-                bible_id=int(get("BIBLINDEX_BIBLE_ID", str(cls.bible_id))),
+                bibles=_bible_spec(get("BIBLINDEX_BIBLE_ID", cls.bibles)),
                 locale=get("BIBLINDEX_LOCALE", cls.locale),
                 min_interval=float(get("BIBLINDEX_MIN_INTERVAL", str(cls.min_interval))),
                 public_min_interval=float(
@@ -60,3 +61,10 @@ class Settings:
             )
         except ValueError as exc:
             raise ConfigError(f"Invalid value in configuration: {exc}") from exc
+
+
+def _bible_spec(value: str) -> str:
+    """Validate "all" or a comma-separated list of Bible ids."""
+    if value.strip().casefold() == "all" or re.fullmatch(r"\s*\d+(\s*,\s*\d+)*\s*", value):
+        return value.strip()
+    raise ValueError(f"BIBLINDEX_BIBLE_ID must be 'all' or ids like 8,4,2, not {value!r}")

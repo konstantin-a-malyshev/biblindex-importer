@@ -21,6 +21,11 @@ from .rate_limiter import RateLimiter
 log = logging.getLogger(__name__)
 
 USER_AGENT = f"biblindex-importer/{__version__} (BiblIndex API client)"
+# Request events passed to the ``on_event`` hook.
+EVENT_OK = "ok"  # response received, status < 400
+EVENT_CACHE = "cache"  # served from the local cache; nothing was sent
+EVENT_ERROR = "error"  # error status (incl. 429, Cloudflare) or network failure
+
 TOKEN_PATH = "/api/token"
 # Renew the token this many seconds before it expires.
 TOKEN_EXPIRY_MARGIN = 60
@@ -81,7 +86,7 @@ class BiblIndexClient:
         max_retries: int = 5,
         max_consecutive_throttles: int = 5,
         timeout: float = 60.0,
-        on_response: Callable[[requests.Response], None] | None = None,
+        on_event: Callable[[str], None] | None = None,
     ) -> None:
         self.settings = settings
         self.session = session or requests.Session()
@@ -99,9 +104,9 @@ class BiblIndexClient:
         self.max_retries = max_retries
         self.max_consecutive_throttles = max_consecutive_throttles
         self.timeout = timeout
-        # Called after every response received over the network (not cache hits),
-        # e.g. to show progress.
-        self.on_response = on_response
+        # Called with EVENT_OK / EVENT_CACHE / EVENT_ERROR for every request
+        # outcome, e.g. to show progress.
+        self.on_event = on_event
         self._token: str | None = None
         self._token_expires_at = 0.0
         self.cache_hits = 0
@@ -136,6 +141,7 @@ class BiblIndexClient:
             cached = self.cache.get(key)
             if cached is not None:
                 self.cache_hits += 1
+                self._emit(EVENT_CACHE)
                 return cached
         data = self._request(url, params, auth=auth)
         if self.cache is not None:
@@ -208,6 +214,7 @@ class BiblIndexClient:
                     url, params=params, headers=headers, timeout=self.timeout
                 )
             except (requests.ConnectionError, requests.Timeout) as exc:
+                self._emit(EVENT_ERROR)
                 attempt += 1
                 if attempt > self.max_retries:
                     raise ApiError(f"Network error for {url}: {exc}") from exc
@@ -281,8 +288,11 @@ class BiblIndexClient:
                 raise ApiError(f"Invalid JSON from {url}", status) from exc
 
     def _notify(self, response: requests.Response) -> None:
-        if self.on_response is not None:
-            self.on_response(response)
+        self._emit(EVENT_OK if response.status_code < 400 else EVENT_ERROR)
+
+    def _emit(self, event: str) -> None:
+        if self.on_event is not None:
+            self.on_event(event)
 
     def _backoff(self, attempt: int, reason: str) -> None:
         wait = min(2.0**attempt, 60.0)

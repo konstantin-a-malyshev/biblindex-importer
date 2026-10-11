@@ -29,7 +29,7 @@ def clean_env(monkeypatch):
 
 def test_defaults_without_env_file(tmp_path):
     settings = Settings.from_env(tmp_path / "missing.env")
-    assert settings.bible_id == 8
+    assert settings.bibles == "all"
     assert settings.min_interval == 1.1
     assert settings.max_reset_wait == 2.0
     assert not settings.has_credentials
@@ -43,7 +43,7 @@ def test_env_file_is_read(tmp_path):
     )
     settings = Settings.from_env(env)
     assert settings.has_credentials
-    assert settings.bible_id == 3
+    assert settings.bibles == "3"
     assert settings.base_url == "https://example.org"
     assert settings.min_interval == 1.1  # empty value falls back to the default
 
@@ -69,6 +69,11 @@ def cli_env(tmp_path, biblindex_cli_api):
 
 @pytest.fixture
 def biblindex_cli_api(api):
+    api.add_collection(
+        "/api/bibles",
+        [{"@id": "/api/bibles/8", "id": 8, "abbreviation": "JB", "name": "Bible de Jerusalem"},
+         {"@id": "/api/bibles/4", "id": 4, "abbreviation": "NTG", "name": "Novum Testamentum"}],
+    )
     api.add_collection(
         "/api/books",
         [{"@id": "/api/books/50", "id": 50, "abbreviation": "Jn", "code": "43N",
@@ -127,25 +132,27 @@ def test_cli_lists_books(cli_env, biblindex_cli_api, capsys):
     assert "John" in capsys.readouterr().out
 
 
-def test_request_dots_wrap_and_end_lines():
+def test_request_marks_wrap_and_end_lines():
     import io
     import logging
 
+    from biblindex_importer.client import EVENT_CACHE, EVENT_ERROR, EVENT_OK
+
     stream = io.StringIO()
-    dots = cli.RequestDots(stream, width=3)
-    for _ in range(5):
-        dots()
-    assert stream.getvalue() == "...\n.."
-    handler = cli.DotAwareHandler(dots)
+    marks = cli.RequestMarks(stream, width=3)
+    for event in (EVENT_OK, EVENT_CACHE, EVENT_ERROR, EVENT_OK, EVENT_OK):
+        marks(event)
+    assert stream.getvalue() == ".!x\n.."
+    handler = cli.MarkAwareHandler(marks)
     handler.setFormatter(logging.Formatter("%(message)s"))
     handler.emit(logging.LogRecord("x", logging.INFO, "", 0, "hello", None, None))
-    assert stream.getvalue() == "...\n..\nhello\n"
-    dots.end_line()  # nothing pending: no blank line
+    assert stream.getvalue() == ".!x\n..\nhello\n"
+    marks.end_line()  # nothing pending: no blank line
     assert stream.getvalue().endswith("hello\n")
 
 
 def _dot_lines(err: str) -> list[str]:
-    return [line for line in err.splitlines() if line and set(line) == {"."}]
+    return [line for line in err.splitlines() if line and set(line) <= {".", "!", "x"}]
 
 
 def test_cli_prints_a_dot_per_response(cli_env, biblindex_cli_api, capsys):
@@ -153,7 +160,40 @@ def test_cli_prints_a_dot_per_response(cli_env, biblindex_cli_api, capsys):
     assert _dot_lines(capsys.readouterr().err) == ["."]  # one page of books
 
 
+def test_cli_marks_cache_hits(cli_env, biblindex_cli_api, capsys):
+    cli.main(["--env-file", str(cli_env), "books"])
+    capsys.readouterr()
+    cli.main(["--env-file", str(cli_env), "books"])  # same request, now cached
+    assert _dot_lines(capsys.readouterr().err) == ["!"]
+
+
 def test_cli_no_dots(cli_env, biblindex_cli_api, capsys):
     cli.main(["--env-file", str(cli_env), "--no-dots", "books"])
     assert len(biblindex_cli_api.calls) == 1  # a real request was made...
     assert _dot_lines(capsys.readouterr().err) == []  # ...but no dot printed
+
+
+@pytest.mark.parametrize("value", ["all", "ALL", "8", "8,4,2", " 8 , 4 "])
+def test_bible_spec_accepts_all_and_id_lists(tmp_path, value):
+    env = tmp_path / ".env"
+    env.write_text(f"BIBLINDEX_BIBLE_ID={value}\n")
+    assert Settings.from_env(env).bibles == value.strip()
+
+
+def test_bible_spec_rejects_names(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("BIBLINDEX_BIBLE_ID=JB\n")
+    with pytest.raises(ConfigError, match="8,4,2"):
+        Settings.from_env(env)
+
+
+def test_cli_exports_all_bibles_by_default(cli_env, biblindex_cli_api):
+    cli.main(["--env-file", str(cli_env), "export", "--book", "John"])
+    queried = {c[1]["bible"] for c in biblindex_cli_api.calls_to("/api/quotations")}
+    assert queried == {"8", "4"}
+
+
+def test_cli_lists_bibles(cli_env, biblindex_cli_api, capsys):
+    assert cli.main(["--env-file", str(cli_env), "bibles"]) == 0
+    out = capsys.readouterr().out
+    assert "JB" in out and "NTG" in out

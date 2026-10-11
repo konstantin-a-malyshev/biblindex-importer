@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .books import Book
+from .books import Bible, Book
 from .client import ApiError, BiblIndexClient, PermissionDeniedError
 from .references import Span, parse_reference, same_book
 
@@ -40,6 +40,7 @@ BASE_COLUMNS = [
     "reference",
     "extract_reference",
     "bible_id",
+    "bible",
     "start_book",
     "start_chapter",
     "start_verse",
@@ -94,6 +95,17 @@ class ExportResult:
     rows: list[dict[str, Any]]
     quotations: int
     unresolved_works: int = 0
+    per_bible: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass
+class _BiblePart:
+    """What one Bible contributes to an export."""
+
+    bible: Bible
+    quotations: list[dict[str, Any]] = field(default_factory=list)
+    extracts: dict[str, dict[str, Any]] = field(default_factory=dict)
+    sequences: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass
@@ -114,9 +126,9 @@ class _Progress:
 
 
 class BookExporter:
-    def __init__(self, client: BiblIndexClient, bible_id: int) -> None:
+    def __init__(self, client: BiblIndexClient, bibles: Iterable[Bible | int]) -> None:
         self.client = client
-        self.bible_id = bible_id
+        self.bibles = [b if isinstance(b, Bible) else Bible(int(b)) for b in bibles]
         self._names: dict[str, str] = {}
         # Flips to False on the first 403 from /api/sequences.
         self.sequences_readable = True
@@ -130,64 +142,93 @@ class BookExporter:
         with_works: bool = False,
         limit: int | None = None,
     ) -> ExportResult:
-        flt = {"bible": self.bible_id, "startBook": book.id}
-
-        quotations = list(
-            self.client.iter_collection(
-                "/api/quotations",
-                flt,
-                limit=limit,
-                on_page=_page_progress("Quotations", 100, limit=limit),
-            )
-        )
-        log.info("%s (bible %s): %d quotations.", book.name, self.bible_id, len(quotations))
-
+        """Export ``book`` across all selected Bibles; ``limit`` caps the total."""
         # A full export lists all extracts and sequences of the book (cheap: 100
         # per request). A --limit trial run fetches only the ones it needs.
         lazy = limit is not None
-        extracts: dict[str, dict[str, Any]] = {}
-        sequences: dict[str, dict[str, Any]] = {}
-        if not lazy:
-            extracts = self._index(
-                self.client.iter_collection(
-                    "/api/extracts", flt, on_page=_page_progress("Extracts", 100)
-                )
-            )
-            try:
-                sequences = self._index(
-                    self.client.iter_collection(
-                        "/api/sequences", flt, on_page=_page_progress("Sequences", 100)
-                    )
-                )
-            except PermissionDeniedError:
-                self._sequences_denied()
+        parts: list[_BiblePart] = []
+        seen: set[str] = set()
+        remaining = limit
+        for bible in self.bibles:
+            if remaining is not None and remaining <= 0:
+                break
+            part = self._collect(book, bible, limit=remaining, lazy=lazy, seen=seen)
+            if part.quotations:
+                parts.append(part)
+                if remaining is not None:
+                    remaining -= len(part.quotations)
+
+        quotations = [q for part in parts for q in part.quotations]
         quotation_types = self._quotation_type_names()
         self._prefetch_authors(quotations)
         works = self.resolve_works(quotations) if with_works else {}
 
         rows: list[dict[str, Any]] = []
-        for quotation in quotations:
-            extract = self._lookup(quotation.get("extract"), extracts)
-            if lazy:
-                self._fetch_sequences(extract, sequences)
-            for coordinates in self._coordinates(extract, sequences, book):
-                row = self._row(quotation, extract, coordinates, quotation_types)
-                if with_works:
-                    row.update(dict.fromkeys(WORK_COLUMNS, ""))
-                    row.update(works.get(_iri(quotation), {}))
-                rows.append(row)
+        for part in parts:
+            for quotation in part.quotations:
+                extract = self._lookup(quotation.get("extract"), part.extracts)
+                if lazy:
+                    self._fetch_sequences(extract, part.sequences)
+                for coordinates in self._coordinates(extract, part.sequences, book, part.bible):
+                    row = self._row(quotation, extract, coordinates, quotation_types, part.bible)
+                    if with_works:
+                        row.update(dict.fromkeys(WORK_COLUMNS, ""))
+                        row.update(works.get(_iri(quotation), {}))
+                    rows.append(row)
 
         unresolved = sum(1 for q in quotations if _iri(q) not in works) if with_works else 0
         return ExportResult(
             rows=rows,
             quotations=len(quotations),
             unresolved_works=unresolved,
+            per_bible={part.bible.label: len(part.quotations) for part in parts},
         )
+
+    def _collect(
+        self, book: Book, bible: Bible, *, limit: int | None, lazy: bool, seen: set[str]
+    ) -> _BiblePart:
+        """Quotations (plus extracts and sequences) of ``book`` indexed in ``bible``."""
+        flt = {"bible": bible.id, "startBook": book.id}
+        part = _BiblePart(bible)
+        for quotation in self.client.iter_collection(
+            "/api/quotations",
+            flt,
+            limit=limit,
+            on_page=_page_progress(f"Quotations [{bible.label}]", PAGE_SIZE, limit=limit),
+        ):
+            # A quotation could be indexed in two Bibles; export it only once.
+            if _iri(quotation) not in seen:
+                seen.add(_iri(quotation))
+                part.quotations.append(quotation)
+        log.info("%s in %s: %d quotations.", book.name, bible.label, len(part.quotations))
+        if not part.quotations or lazy:
+            return part
+        part.extracts = self._index(
+            self.client.iter_collection(
+                "/api/extracts", flt, on_page=_page_progress(f"Extracts [{bible.label}]", 100)
+            )
+        )
+        if self.sequences_readable:
+            try:
+                part.sequences = self._index(
+                    self.client.iter_collection(
+                        "/api/sequences",
+                        flt,
+                        on_page=_page_progress(f"Sequences [{bible.label}]", 100),
+                    )
+                )
+            except PermissionDeniedError:
+                self._sequences_denied()
+        return part
 
     # -- Verse coordinates ----------------------------------------------------
 
     def _coordinates(
-        self, extract: dict[str, Any], sequences: dict[str, dict[str, Any]], book: Book
+        self,
+        extract: dict[str, Any],
+        sequences: dict[str, dict[str, Any]],
+        book: Book,
+        bible: Bible,
     ) -> list[dict[str, Any]]:
         """Coordinate columns for each span of the extract inside ``book``.
 
@@ -197,7 +238,7 @@ class BookExporter:
         in_book = [
             sequences[iri]
             for iri in extract.get("sequences") or []
-            if iri in sequences and self._in_scope(sequences[iri], book)
+            if iri in sequences and _in_scope(sequences[iri], book, bible)
         ]
         if in_book:
             return [self._from_sequence(s) for s in in_book]
@@ -255,11 +296,13 @@ class BookExporter:
         extract: dict[str, Any],
         coordinates: dict[str, Any],
         quotation_types: dict[str, str],
+        bible: Bible,
     ) -> dict[str, Any]:
         return {
             "quotation_id": quotation.get("id", _id_from_iri(_iri(quotation))),
             "extract_reference": extract.get("abbreviation") or "",
-            "bible_id": self.bible_id,
+            "bible_id": bible.id,
+            "bible": bible.abbreviation,
             **dict.fromkeys(COORDINATE_COLUMNS, ""),
             **coordinates,
             "quotation_types": "; ".join(
@@ -283,13 +326,6 @@ class BookExporter:
         if iri not in index:
             index[iri] = self.client.get(iri)
         return index[iri]
-
-    def _in_scope(self, sequence: dict[str, Any], book: Book) -> bool:
-        """Sequence starts in the exported book, in the exported Bible."""
-        bible = sequence.get("bible")
-        return sequence.get("startBook") == book.iri and (
-            not bible or _id_from_iri(bible) == str(self.bible_id)
-        )
 
     @staticmethod
     def _index(items: Iterable[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -501,7 +537,12 @@ def write_csv(rows: list[dict[str, Any]], path: Path, *, with_works: bool) -> No
     with path.open("w", newline="", encoding="utf-8-sig") as fh:
         writer = csv.DictWriter(fh, fieldnames=columns, extrasaction="ignore")
         writer.writeheader()
-        writer.writerows(rows)
+        # One record per line: some API texts carry line breaks (e.g. 557 edition
+        # names ending in "\r\n"), which would make line counts disagree with rows.
+        writer.writerows(
+            {key: _clean(value) if isinstance(value, str) else value for key, value in row.items()}
+            for row in rows
+        )
 
 
 # -- Helpers ------------------------------------------------------------------
@@ -513,6 +554,14 @@ def _iri(item: dict[str, Any]) -> str:
 
 def _id_from_iri(iri: str) -> str:
     return iri.rstrip("/").rsplit("/", 1)[-1] if iri else ""
+
+
+def _in_scope(sequence: dict[str, Any], book: Book, bible: Bible) -> bool:
+    """Sequence starts in the exported book, in the given Bible."""
+    bible_iri = sequence.get("bible")
+    return sequence.get("startBook") == book.iri and (
+        not bible_iri or _id_from_iri(bible_iri) == str(bible.id)
+    )
 
 
 def _from_span(span: Span) -> dict[str, Any]:

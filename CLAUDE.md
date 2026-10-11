@@ -36,9 +36,11 @@ Setup: `python -m venv .venv && .venv/Scripts/python -m pip install -e ".[dev]" 
   `COORDINATE_COLUMNS` keys (empty when unknown).
 - `references.py`: pure parser for reference strings such as `[JB] Jn 1:1 w1-16`.
   It is the fallback when sequences are not readable.
-- `cli.py`: argparse subcommands `export` and `books`. `RequestDots` prints a dot per
-  network response via the client's `on_response` hook (no dot for cache hits).
-  `DotAwareHandler` ends a row of dots before each log line. `--no-dots` disables it.
+- `cli.py`: argparse subcommands `export`, `books` and `bibles`. `RequestMarks`
+  prints a mark per request via the client's `on_event` hook: `.` for `EVENT_OK`,
+  `!` for `EVENT_CACHE` and `x` for `EVENT_ERROR` (any status ≥ 400 or network
+  failure, including retried ones). `MarkAwareHandler` ends a row of marks before
+  each log line. `--no-dots` disables them.
 
 Tests use `tests/conftest.py::FakeApi`, an in-memory fake server on `responses`
 that paginates and filters through a private `_f` dict per item, with
@@ -48,9 +50,8 @@ API behaviour to FakeApi rather than mocking individual URLs.
 
 ## BiblIndex API facts (learned the hard way)
 
-- **Spec:** the HTML docs page (`/en/api-documentation`) and `/api/bibles` sit
-  behind a Cloudflare browser check and can't be fetched by tools. Get the full
-  OpenAPI spec with
+- **Spec:** the HTML docs page (`/en/api-documentation`) sits behind a Cloudflare
+  browser check and can't be fetched by tools. Get the full OpenAPI spec with
   `curl -H "Accept: application/vnd.openapi+json" https://www.biblindex.org/api/docs.jsonopenapi`.
   Do not try to bypass Cloudflare challenges.
 - **Auth:** `POST /api/token`, form-encoded → `Authorization: Bearer`. The spec says
@@ -113,16 +114,27 @@ API behaviour to FakeApi rather than mocking individual URLs.
   collection, whichever takes fewer requests.
   The user said author, work and position are the most important data. A
   "by-work" strategy existed once and was removed because it gives no position.
-- **IDs:** John = book 50, Matthew 47, Mark 48, Luke 49. The default Bible id is 8,
-  taken from the API docs' own example.
+- **IDs:** John = book 50, Matthew 47, Mark 48, Luke 49.
+- **Bibles matter for completeness:** every quotation is indexed in the Bible its
+  author quoted. For John (2026-10-11): 8 JB (French) 54,507, 4 NTG (Greek NT) 11,892,
+  2 Vg (Vulgate) 6,053, 14 NTS (Syriac) 14. The sum is 72,466, which equals the
+  count with no bible filter, so there is no overlap. The website search for
+  Jn 1:1–21:25 says 72,268. Bible 8 alone (the old default, from the docs'
+  example) missed 25%. The default is now `BIBLINDEX_BIBLE_ID=all`: one
+  indexed `bible`+`startBook` query per Bible (21 Bibles), never an unfiltered
+  scan. `/api/bibles` is public and works with the tool's UA (its earlier
+  Cloudflare block was the python-requests UA).
 - **Scale:** about 5,988 works and 9,287 work editions in total.
 
 ## Not yet verified against the live API (no credentials yet)
 
-- Bible 8 + John returns 54,507 quotations, so it is at least a well-populated
-  Bible. Whether other Bible ids hold further John quotations is unknown.
+- Why the API has ~200 more John quotations (72,466) than the website search
+  (72,268). One guess is that the website's verse range drops chapter-only or
+  unusual references. Check it by comparing a per-chapter count from the CSV
+  with the website.
 - How the website joins book/chapter/paragraph divisions in a position (we use
-  `.`, as in `2.3.4`). Only paragraph-only positions have been compared so far.
+  `.`, as in `OS.1.4` for Vulgate quotation 1608701). Only paragraph-only
+  positions have been compared so far.
 
 When credentials become available, check these first with a `--limit` run, and
 update this section.
